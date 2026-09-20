@@ -37,11 +37,22 @@ def _store(name, cf):
     return False
 
 
+def _prune():
+    """Выкидывает вышедших (молчат дольше EXPIRE_AFTER)."""
+    now = time.time()
+    expired = [n for n, t in last_seen.items() if now - t > EXPIRE_AFTER]
+    for n in expired:
+        players_db.pop(n, None)
+        last_seen.pop(n, None)
+
+
 # --- ЗАПИСЬ (только с ключом) ---
 @app.route('/update', methods=['POST'])
 def update_position():
     """Roblox шлёт сюда позиции. Только с правильным ключом.
-    Принимает батч {players: {name: cframe}} или одиночный {name, cframe}."""
+    Принимает батч {players: {name: cframe}} или одиночный {name, cframe}.
+    V3.1 piggyback: свежий стейт возвращается прямо в ответе,
+    отдельный GET /state на каждый тик больше не нужен."""
     key = request.headers.get("X-Api-Key")
     if key != API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
@@ -50,26 +61,24 @@ def update_position():
     if not data:
         return jsonify({"error": "Bad data"}), 400
 
+    stored = 0
     if isinstance(data.get("players"), dict):
+        # Батч; пустой тоже ок — это heartbeat ради свежего стейта в ответе
         stored = sum(1 for n, cf in data["players"].items() if _store(n, cf))
-        if not stored:
-            return jsonify({"error": "Bad data"}), 400
-        return jsonify({"status": "ok", "stored": stored}), 200
+    elif _store(data.get("name"), data.get("cframe")):
+        stored = 1
+    else:
+        return jsonify({"error": "Bad data"}), 400
 
-    if _store(data.get("name"), data.get("cframe")):
-        return jsonify({"status": "ok"}), 200
-    return jsonify({"error": "Bad data"}), 400
+    _prune()
+    return jsonify({"status": "ok", "stored": stored, "players": players_db}), 200
 
 
 # --- ЧТЕНИЕ (публичное) ---
 @app.route('/state', methods=['GET'])
 def get_state():
     """Любой может читать позиции игроков. Вышедшие чистятся по таймауту."""
-    now = time.time()
-    expired = [n for n, t in last_seen.items() if now - t > EXPIRE_AFTER]
-    for n in expired:
-        players_db.pop(n, None)
-        last_seen.pop(n, None)
+    _prune()
     return jsonify({"players": players_db}), 200
 
 
