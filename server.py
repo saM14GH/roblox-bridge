@@ -62,9 +62,13 @@ def update_position():
         return jsonify({"error": "Bad data"}), 400
 
     stored = 0
-    if isinstance(data.get("players"), dict):
+    players = data.get("players")
+    if isinstance(players, dict):
         # Батч; пустой тоже ок — это heartbeat ради свежего стейта в ответе
-        stored = sum(1 for n, cf in data["players"].items() if _store(n, cf))
+        stored = sum(1 for n, cf in players.items() if _store(n, cf))
+    elif isinstance(players, list) and len(players) == 0:
+        # Пустая Lua-таблица едет по сети как [] — тоже heartbeat, не ошибка
+        pass
     elif _store(data.get("name"), data.get("cframe")):
         stored = 1
     else:
