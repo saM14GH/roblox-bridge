@@ -14,28 +14,62 @@ if not API_KEY:
 
 # Временное хранилище (в памяти).
 players_db = {}
+last_seen = {}
+
+# Игрок считается вышедшим, если не присылал позиции дольше этого (сек).
+EXPIRE_AFTER = 15
+
+
+def _valid_cframe(cf):
+    return (
+        isinstance(cf, dict)
+        and isinstance(cf.get("x"), (int, float))
+        and isinstance(cf.get("y"), (int, float))
+        and isinstance(cf.get("z"), (int, float))
+    )
+
+
+def _store(name, cf):
+    if isinstance(name, str) and name and _valid_cframe(cf):
+        players_db[name] = cf
+        last_seen[name] = time.time()
+        return True
+    return False
 
 
 # --- ЗАПИСЬ (только с ключом) ---
 @app.route('/update', methods=['POST'])
 def update_position():
-    """Roblox шлёт сюда свою позицию. Только с правильным ключом."""
+    """Roblox шлёт сюда позиции. Только с правильным ключом.
+    Принимает батч {players: {name: cframe}} или одиночный {name, cframe}."""
     key = request.headers.get("X-Api-Key")
     if key != API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
 
     data = request.get_json()
-    if not data or "name" not in data or "cframe" not in data:
+    if not data:
         return jsonify({"error": "Bad data"}), 400
 
-    players_db[data["name"]] = data["cframe"]
-    return jsonify({"status": "ok"}), 200
+    if isinstance(data.get("players"), dict):
+        stored = sum(1 for n, cf in data["players"].items() if _store(n, cf))
+        if not stored:
+            return jsonify({"error": "Bad data"}), 400
+        return jsonify({"status": "ok", "stored": stored}), 200
+
+    if _store(data.get("name"), data.get("cframe")):
+        return jsonify({"status": "ok"}), 200
+    return jsonify({"error": "Bad data"}), 400
 
 
 # --- ЧТЕНИЕ (публичное) ---
 @app.route('/state', methods=['GET'])
 def get_state():
-    """Любой может читать позиции игроков."""
+    """Любой может читать позиции игроков. Вышедшие чистятся по таймауту."""
+    now = time.time()
+    expired = [n for n, t in last_seen.items() if now - t > EXPIRE_AFTER]
+    for n in expired:
+        players_db.pop(n, None)
+        last_seen.pop(n, None)
     return jsonify({"players": players_db}), 200
 
 
